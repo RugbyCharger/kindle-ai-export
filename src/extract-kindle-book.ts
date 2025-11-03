@@ -86,7 +86,9 @@ async function main() {
       // disable chrome's password autosave popups
       '--disable-features=PasswordAutosave',
       // disable chrome's passkey popups
-      '--disable-features=WebAuthn'
+      '--disable-features=WebAuthn',
+      // disable chrome creating 1GB temp directories on each run
+      '--disable-features=MacAppCodeSignClone'
     ],
     ignoreDefaultArgs: [
       // disable chrome's default automation detection flag
