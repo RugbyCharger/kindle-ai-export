@@ -5,5 +5,9 @@
   - handle extra newlines and breaks
     - B000FBJAGO page 68
   - investigate direct glyph mapping per render TAR chunk (every 5 pages)
-  - toc metadata should include positions
-    - investigate inferring these without scrolling through TOC sequentially
+
+56 sections
+page => startPosition
+"startPositionId": 234954
+"endPositionId": 236216
+"wordsInPage": 269
