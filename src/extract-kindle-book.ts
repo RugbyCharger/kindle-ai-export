@@ -21,6 +21,7 @@ import type {
 import { parsePageNav, parseTocItems } from './playwright-utils'
 import {
   assert,
+  deromanize,
   extractTar,
   getEnv,
   hashObject,
@@ -176,6 +177,10 @@ async function main() {
 
             for (const navUnit of result.locationMap.navigationUnit) {
               navUnit.page = Number.parseInt(navUnit.label, 10)
+              if (Number.isNaN(navUnit.page)) {
+                // Front matter pages use roman numeral labels
+                navUnit.page = deromanize(navUnit.label)
+              }
               assert(
                 !Number.isNaN(navUnit.page),
                 `invalid locationMap page number: ${navUnit.label}`
