@@ -2,8 +2,9 @@
 
 > Export any Kindle book you own as text, PDF, EPUB, or as a custom, AI-narrated audiobook. 🔥
 
+> **Fork of [transitive-bullshit/kindle-ai-export](https://github.com/transitive-bullshit/kindle-ai-export)** with bug fixes, improved error handling, retry logic, unit tests, and code cleanup.
+
 <p>
-  <a href="https://github.com/transitive-bullshit/kindle-ai-export/actions/workflows/main.yml"><img alt="Build Status" src="https://github.com/transitive-bullshit/kindle-ai-export/actions/workflows/main.yml/badge.svg" /></a>
   <a href="https://github.com/transitive-bullshit/kindle-ai-export/blob/main/license"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue" /></a>
   <a href="https://prettier.io"><img alt="Prettier Code Formatting" src="https://img.shields.io/badge/code_style-prettier-brightgreen.svg" /></a>
 </p>
@@ -20,6 +21,7 @@
   - [(Optional) Export Book as EPUB](#optional-export-book-as-epub)
   - [(Optional) Export Book as Markdown](#optional-export-book-as-markdown)
   - [(Optional) Export Book as AI-Narrated Audiobook 🔥](#optional-export-book-as-ai-narrated-audiobook-)
+- [Fork Changes](#fork-changes)
 - [Disclaimer](#disclaimer)
 - [Author's Notes](#authors-notes)
   - [Alternative Approaches](#alternative-approaches)
@@ -34,7 +36,7 @@ _You must own the ebook on Kindle for this project to work._
 
 ### How does it work?
 
-It works by logging into your [Kindle web reader](https://read.amazon.com) account using [Playwright](https://playwright.dev), exporting each page of a book as a PNG image, and then using a vLLM (defaulting to `gpt-4.1-mini`) to transcribe the text from each page to text. Once we have the raw book contents and metadata, then it's easy to convert it to PDF, EPUB, etc. 🔥
+It works by logging into your [Kindle web reader](https://read.amazon.com) account using [Patchright](https://github.com/AhmedSoliman/patchright) (a Playwright fork with anti-detection patches), exporting each page of a book as a PNG image, and then using a vLLM (defaulting to `gpt-4.1-mini`) to transcribe the text from each page to text. Once we have the raw book contents and metadata, then it's easy to convert it to PDF, EPUB, etc. 🔥
 
 This [example](./examples/B0819W19WD) uses the first page of the scifi book [Revelation Space](https://www.amazon.com/gp/product/B0819W19WD?ref_=dbs_m_mng_rwt_calw_tkin_0&storeType=ebooks) by [Alastair Reynolds](https://www.goodreads.com/author/show/51204.Alastair_Reynolds):
 
@@ -50,7 +52,7 @@ This [example](./examples/B0819W19WD) uses the first page of the scifi book [Rev
     </tr>
     <tr>
       <td>
-        We use Playwright to navigate to each page of the selected book.
+        We use Patchright to navigate to each page of the selected book.
       </td>
       <td>
         <img src="./examples/B0819W19WD/kindle-reader-page-example.png" alt="Kindle web reader page">
@@ -58,7 +60,7 @@ This [example](./examples/B0819W19WD) uses the first page of the scifi book [Rev
     </tr>
     <tr>
       <td>
-        For each page, we use Playwright to export a scaled down PNG screenshot of the page's rendered content.
+        For each page, we use Patchright to export a scaled down PNG screenshot of the page's rendered content.
       </td>
       <td>
         <img src="./examples/B0819W19WD/pages/0000-0001.png" alt="First page of Revelation Space by Alastair Reynolds">
@@ -143,11 +145,11 @@ This project changes that.
 
 _Why?_ Because I love reading books on Kindle (especially scifi books!!), but none of the content is _hackable_. The official Kindle apps are also lagging behind in their AI features, so my goal with this project was to make it easy to build AI-powered experiments on top of my own Kindle library. In order to do that, I first needed a reliable way to export the contents of my Kindle books in a reasonable format.
 
-I also created an [OSS TypeScript client for the unofficial Kindle API](https://github.com/transitive-bullshit/kindle-api), but I ended up only using some of the types and utils since Playwright + vLLMs allowed me to completely bypass their API and DRM. This approach should also be a lot less error-prone than using their unofficial API.
+I also created an [OSS TypeScript client for the unofficial Kindle API](https://github.com/transitive-bullshit/kindle-api), but I ended up only using some of the types and utils since Patchright + vLLMs allowed me to completely bypass their API and DRM. This approach should also be a lot less error-prone than using their unofficial API.
 
 ## Usage
 
-Make sure you have `node >= 18` and [pnpm](https://pnpm.io) installed.
+Make sure you have `node >= 20` and [pnpm](https://pnpm.io) installed.
 
 1. Clone this repo
 2. Run `pnpm install`
@@ -169,6 +171,9 @@ AMAZON_PASSWORD=
 ASIN=
 
 OPENAI_API_KEY=
+
+# Optional: control API request concurrency (default: 16 for transcribe, 32 for audio)
+# CONCURRENCY=16
 ```
 
 You can find your book's [ASIN](https://en.wikipedia.org/wiki/Amazon_Standard_Identification_Number) (Amazon ID) by visiting [read.amazon.com](https://read.amazon.com) and clicking on the book you want to export. The resulting URL will look like `https://read.amazon.com/?asin=B0819W19WD&ref_=kwl_kr_iv_rec_2`, with `B0819W19WD` being the ASIN in this case.
@@ -180,7 +185,7 @@ npx tsx src/extract-kindle-book.ts
 ```
 
 - _(This takes a few minutes to run)_
-- This logs into your [Amazon Kindle web reader](https://read.amazon.com) using headless Chrome ([Playwright](https://playwright.dev)). It can be pretty fun to watch it run, so feel free to tweak the script to use `headless: false` to watch it do its thing.
+- This logs into your [Amazon Kindle web reader](https://read.amazon.com) using Chrome via [Patchright](https://github.com/AhmedSoliman/patchright). The browser opens visibly (`headless: false`) so you can watch it work and handle 2FA if needed.
 - If your account requires 2FA, the terminal will request a code from you before proceeding.
 - It uses a persistent browser session, so you should only have to auth once.
 - Once logged in, it navigates to the web reader page for a specific book (`https://read.amazon.com/?asin=${ASIN}`).
@@ -203,7 +208,9 @@ npx tsx src/transcribe-book-content.ts
 
 - _(This takes a few minutes to run)_
 - This takes each of the page screenshots and runs them through a vLLM (defaulting to `gpt-4.1-mini`) to extract the raw text content from each page of the book.
+- Includes automatic retry with exponential backoff for rate limits and transient API errors.
 - It then stitches these text chunks together, taking into account chapter boundaries.
+- Set `CONCURRENCY` to control parallel API requests (default: 16).
 - The result is stored as JSON to `out/${asin}/content.json`.
 - Example: [examples/B0819W19WD/content.json](./examples/B0819W19WD/content.json)
 
@@ -263,6 +270,28 @@ npx tsx src/export-book-audio.ts
   - On Mac, `brew install ffmpeg` ([or install with more options](https://stackoverflow.com/a/55108365/2353599))
 - The resulting audiobook is stored to `out/${asin}/audio/<tts-engine-hash>/audiobook.mp3`.
 - Examples: [examples/B0819W19WD/audio-previews](./examples/B0819W19WD/audio-previews)
+
+## Fork Changes
+
+This fork includes the following improvements over the [upstream repo](https://github.com/transitive-bullshit/kindle-ai-export):
+
+- **Bug fix:** Handle roman numeral page labels in Kindle's location map (front matter pages like `i`, `ii`, `iii`)
+- **Error handling:** Response handler errors are now logged instead of silently swallowed
+- **Retry logic:** OpenAI API calls use exponential backoff for rate limits (429) and transient errors (500/503)
+- **Dropped page warnings:** Transcription now warns when pages fail instead of silently dropping them
+- **Configurable concurrency:** Set `CONCURRENCY` env var to control parallel API requests
+- **Regex safety:** TOC labels are properly escaped before use in regular expressions
+- **Removed unused deps:** `playwright` and `playwright-core` removed (only `patchright` is used)
+- **Shared chapter utility:** Deduplicated chapter iteration logic across PDF, Markdown, and Audio exports
+- **Unit tests:** 29 tests covering utility functions, page navigation parsing, and TOC processing
+- **Code cleanup:** Removed dead code, commented-out blocks, and fixed `any` types
+
+To pull future upstream updates:
+
+```sh
+git fetch upstream
+git merge upstream/main
+```
 
 ## Disclaimer
 

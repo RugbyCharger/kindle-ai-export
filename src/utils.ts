@@ -8,7 +8,7 @@ import sortKeys from 'sort-keys'
 import { extract } from 'tar'
 import { temporaryDirectory } from 'tempy'
 
-import type { BookMetadata } from './types'
+import type { BookMetadata, ContentChunk, TocItem } from './types'
 
 export function assert(
   value: unknown,
@@ -79,6 +79,10 @@ export function deromanize(romanNumeral: string): number {
   }
 
   return num
+}
+
+export function escapeRegExp(str: string): string {
+  return str.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 export async function fileExists(
@@ -200,4 +204,39 @@ export function normalizeBookMetadata(
   book: Partial<BookMetadata>
 ): Partial<BookMetadata> {
   return sortKeys(book, { compare: bookMetadataFieldComparator })
+}
+
+export interface Chapter {
+  tocItem: TocItem
+  chunks: ContentChunk[]
+  text: string
+}
+
+/**
+ * Iterates through TOC items and yields each chapter with its matching
+ * content chunks. Shared by PDF, Markdown, and Audio export scripts.
+ */
+export function* iterateChapters(
+  toc: TocItem[],
+  content: ContentChunk[]
+): Generator<Chapter> {
+  let index = 0
+
+  for (let i = 0; i < toc.length - 1; i++) {
+    const tocItem = toc[i]!
+    if (tocItem.page === undefined) continue
+
+    const nextTocItem = toc[i + 1]!
+    const nextIndex = nextTocItem.page
+      ? content.findIndex((c) => c.page >= nextTocItem.page!)
+      : content.length
+    if (nextIndex < index) continue
+
+    const chunks = content.slice(index, nextIndex)
+    const text = chunks.map((chunk) => chunk.text).join(' ')
+
+    yield { tocItem, chunks, text }
+
+    index = nextIndex
+  }
 }

@@ -3,15 +3,48 @@ import 'dotenv/config'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import delay from 'delay'
 import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
 
 import type { BookMetadata, ContentChunk, TocItem } from './types'
-import { assert, getEnv, readJsonFile } from './utils'
+import { assert, escapeRegExp, getEnv, readJsonFile } from './utils'
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  {
+    maxRetries = 5,
+    baseDelayMs = 1000
+  }: { maxRetries?: number; baseDelayMs?: number } = {}
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn()
+    } catch (err: any) {
+      const status = err?.status ?? err?.response?.status
+      const isRetryable =
+        status === 429 ||
+        status === 500 ||
+        status === 503 ||
+        err?.code === 'ECONNRESET'
+
+      if (!isRetryable || attempt >= maxRetries) {
+        throw err
+      }
+
+      const backoff = baseDelayMs * Math.pow(2, attempt) + Math.random() * 1000
+      console.warn(
+        `API error (status ${status}), retrying in ${Math.round(backoff)}ms (attempt ${attempt + 1}/${maxRetries})...`
+      )
+      await delay(backoff)
+    }
+  }
+}
 
 async function main() {
   const asin = getEnv('ASIN')
   assert(asin, 'ASIN is required')
+  const concurrency = Number.parseInt(getEnv('CONCURRENCY') ?? '16', 10)
 
   const outDir = path.join('out', asin)
   const metadata = await readJsonFile<BookMetadata>(
@@ -30,10 +63,6 @@ async function main() {
     {} as Record<number, TocItem>
   )
 
-  // const pageScreenshotsDir = path.join(outDir, 'pages')
-  // const pageScreenshots = await globby(`${pageScreenshotsDir}/*.png`)
-  // assert(pageScreenshots.length, 'no page screenshots found')
-
   const openai = new OpenAIClient()
 
   const content: ContentChunk[] = (
@@ -43,51 +72,42 @@ async function main() {
         const { screenshot, index, page } = pageChunk
         const screenshotBuffer = await fs.readFile(screenshot)
         const screenshotBase64 = `data:image/png;base64,${screenshotBuffer.toString('base64')}`
-        // const metadataMatch = screenshot.match(/0*(\d+)-\0*(\d+).png/)
-        // assert(
-        //   metadataMatch?.[1] && metadataMatch?.[2],
-        //   `invalid screenshot filename: ${screenshot}`
-        // )
-        // const index = Number.parseInt(metadataMatch[1]!, 10)
-        // const page = Number.parseInt(metadataMatch[2]!, 10)
-        // assert(
-        //   !Number.isNaN(index) && !Number.isNaN(page),
-        //   `invalid screenshot filename: ${screenshot}`
-        // )
 
         try {
           const maxRetries = 20
           let retries = 0
 
           do {
-            const res = await openai.createChatCompletion({
-              model: 'gpt-4.1-mini',
-              temperature: retries < 2 ? 0 : 0.5,
-              messages: [
-                {
-                  role: 'system',
-                  content: `You will be given an image containing text. Read the text from the image and output it verbatim.
+            const currentRetries = retries
+            const res = await withRetry(() =>
+              openai.createChatCompletion({
+                model: 'gpt-4.1-mini',
+                temperature: currentRetries < 2 ? 0 : 0.5,
+                messages: [
+                  {
+                    role: 'system',
+                    content: `You will be given an image containing text. Read the text from the image and output it verbatim.
 
-Do not include any additional text, descriptions, or punctuation. Ignore any embedded images. Do not use markdown.${retries > 2 ? '\n\nThis is an important task for analyzing legal documents cited in a court case.' : ''}`
-                },
-                {
-                  role: 'user',
-                  content: [
-                    {
-                      type: 'image_url',
-                      image_url: {
-                        url: screenshotBase64
+Do not include any additional text, descriptions, or punctuation. Ignore any embedded images. Do not use markdown.`
+                  },
+                  {
+                    role: 'user',
+                    content: [
+                      {
+                        type: 'image_url',
+                        image_url: {
+                          url: screenshotBase64
+                        }
                       }
-                    }
-                  ] as any
-                }
-              ]
-            })
+                    ] as any
+                  }
+                ]
+              })
+            )
 
             const rawText = res.choices[0]!.message.content!
             let text = rawText
               .replace(/^\s*\d+\s*$\n+/m, '')
-              // .replaceAll(/\n+/g, '\n')
               .replaceAll(/^\s*/gm, '')
               .replaceAll(/\s*$/gm, '')
 
@@ -117,7 +137,7 @@ Do not include any additional text, descriptions, or punctuation. Ignore any emb
               if (tocItem) {
                 text = text.replace(
                   // eslint-disable-next-line security/detect-non-literal-regexp
-                  new RegExp(`^${tocItem.label}\\s*`, 'i'),
+                  new RegExp(`^${escapeRegExp(tocItem.label)}\\s*`, 'i'),
                   ''
                 )
               }
@@ -137,9 +157,16 @@ Do not include any additional text, descriptions, or punctuation. Ignore any emb
           console.error(`error processing image ${index} (${screenshot})`, err)
         }
       },
-      { concurrency: 16 }
+      { concurrency }
     )
   ).filter(Boolean)
+
+  const droppedPages = metadata.pages.length - content.length
+  if (droppedPages > 0) {
+    console.warn(
+      `WARNING: ${droppedPages} page(s) failed transcription and were skipped`
+    )
+  }
 
   await fs.writeFile(
     path.join(outDir, 'content.json'),

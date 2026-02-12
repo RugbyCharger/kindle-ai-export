@@ -7,7 +7,6 @@ import type { SetRequired } from 'type-fest'
 import { input } from '@inquirer/prompts'
 import delay from 'delay'
 import pRace from 'p-race'
-// import { chromium } from 'playwright'
 import { chromium } from 'patchright'
 import sharp from 'sharp'
 
@@ -40,9 +39,6 @@ const urlRegexBlacklist = [
   /fls-na\.amazon\.com.*\/remote-weblab-triggers/i
 ]
 
-type RENDER_METHOD = 'screenshot' | 'blob'
-const renderMethod: RENDER_METHOD = 'blob'
-
 async function main() {
   const asin = getEnv('ASIN')
   const amazonEmail = getEnv('AMAZON_EMAIL')
@@ -64,7 +60,6 @@ async function main() {
 
   const result: SetRequired<Partial<BookMetadata>, 'pages' | 'nav'> = {
     pages: [],
-    // locationMap: { locations: [], navigationUnit: [] },
     nav: {
       startPosition: -1,
       endPosition: -1,
@@ -138,7 +133,7 @@ async function main() {
         }
 
         if (!result.meta) {
-          console.warn('book meta', metadata)
+          console.log('book meta', metadata)
           result.meta = metadata
         }
       } else if (
@@ -151,11 +146,10 @@ async function main() {
           delete body.metadataUrl
           delete body.YJFormatVersion
           if (!result.info) {
-            console.warn('book info', body)
+            console.log('book info', body)
           }
           result.info = body
         } else if (url.pathname === '/renderer/render') {
-          // TODO: these TAR files have some useful metadata that we could use...
           const params = Object.fromEntries(url.searchParams.entries())
           const hash = hashObject(params)
           const renderDir = path.join(userDataDir, 'render', hash)
@@ -208,18 +202,18 @@ async function main() {
 
             result.toc = toc
           }
-
-          // TODO: `page_data_0_5.json` has start/end/words for each page in this render batch
-          // const toc = JSON.parse(
-          //   await fs.readFile(path.join(tempDir, 'toc.json'), 'utf8')
-          // )
-          // console.warn('toc', toc)
         }
       }
-    } catch {}
+    } catch (err: any) {
+      // Only log errors for responses we were actually trying to process
+      // (non-matching URLs exit early before any parsing)
+      const url = response.url()
+      if (url.includes('YJmetadata.jsonp') || url.includes('read.amazon.com')) {
+        console.error(`Error processing response ${url}:`, err.message)
+      }
+    }
   })
 
-  // Only used for the 'blob' render method
   const capturedBlobs = new Map<
     string,
     {
@@ -228,46 +222,40 @@ async function main() {
     }
   >()
 
-  if (renderMethod === 'blob') {
-    await page.exposeFunction('nodeLog', (...args: any[]) => {
-      console.error('[page]', ...args)
-    })
+  await page.exposeFunction('nodeLog', (...args: any[]) => {
+    console.error('[page]', ...args)
+  })
 
-    await page.exposeBinding('captureBlob', (_source, url, payload) => {
-      capturedBlobs.set(url, payload)
-    })
+  await page.exposeBinding('captureBlob', (_source, url, payload) => {
+    capturedBlobs.set(url, payload)
+  })
 
-    await context.addInitScript(() => {
-      const origCreateObjectURL = URL.createObjectURL.bind(URL)
-      URL.createObjectURL = function (blob: Blob) {
-        // TODO: filter for image/png blobs? since those are the only ones we're using
-        // (haven't found this to be an issue in practice)
-        const type = blob.type || 'application/octet-stream'
-        const url = origCreateObjectURL(blob)
-        // nodeLog('createObjectURL', url, type, blob.size)
+  await context.addInitScript(() => {
+    const origCreateObjectURL = URL.createObjectURL.bind(URL)
+    URL.createObjectURL = function (blob: Blob) {
+      const type = blob.type || 'application/octet-stream'
+      const url = origCreateObjectURL(blob)
 
-        // Snapshot blob bytes immediately because kindle's renderer revokes
-        // them immediately after they're used.
-        ;(async () => {
-          const buf = await blob.arrayBuffer()
-          // store raw base64 (not data URL) to keep payload small
-          let binary = ''
-          const bytes = new Uint8Array(buf)
-          for (const byte of bytes) {
-            // eslint-disable-next-line unicorn/prefer-code-point
-            binary += String.fromCharCode(byte)
-          }
+      // Snapshot blob bytes immediately because kindle's renderer revokes
+      // them immediately after they're used.
+      ;(async () => {
+        const buf = await blob.arrayBuffer()
+        let binary = ''
+        const bytes = new Uint8Array(buf)
+        for (const byte of bytes) {
+          // eslint-disable-next-line unicorn/prefer-code-point
+          binary += String.fromCharCode(byte)
+        }
 
-          const base64 = btoa(binary)
+        const base64 = btoa(binary)
 
-          // @ts-expect-error captureBlob
-          captureBlob(url, { type, base64 })
-        })()
+        // @ts-expect-error captureBlob
+        captureBlob(url, { type, base64 })
+      })()
 
-        return url
-      }
-    })
-  }
+      return url
+    }
+  })
 
   // Try going directly to the book reader page if we're already authenticated.
   // Otherwise wait for the signin page to load.
@@ -282,7 +270,6 @@ async function main() {
     await page.locator('input[type="submit"]').click()
 
     await page.locator('input[type="password"]').fill(amazonPassword)
-    // await page.locator('input[type="checkbox"]').click()
     await page.locator('input[type="submit"]').click()
 
     if (!/\/kindle-library/g.test(new URL(page.url()).pathname)) {
@@ -351,7 +338,6 @@ async function main() {
     await page
       .locator('ion-modal input[placeholder="page number"]')
       .fill(`${pageNumber}`)
-    // await page.locator('ion-modal button', { hasText: 'Go' }).click()
     await page
       .locator('ion-modal ion-button[item-i-d="go-to-modal-go-button"]')
       .click()
@@ -483,7 +469,7 @@ async function main() {
   await goToPage(result.nav.startContentPage)
 
   let done = false
-  console.warn(
+  console.log(
     `\nreading ${result.nav.totalNumContentPages} content pages out of ${result.nav.totalNumPages} total pages...\n`
   )
 
@@ -505,53 +491,40 @@ async function main() {
       .locator(krRendererMainImageSelector)
       .getAttribute('src'))!
 
-    let renderedPageImageBuffer: Buffer | undefined
+    const blob = await pRace<{ type: string; base64: string } | undefined>(
+      (signal) => [
+        (async () => {
+          while (!signal.aborted) {
+            const blob = capturedBlobs.get(src)
 
-    if (renderMethod === 'blob') {
-      const blob = await pRace<{ type: string; base64: string } | undefined>(
-        (signal) => [
-          (async () => {
-            while (!signal.aborted) {
-              const blob = capturedBlobs.get(src)
-
-              if (blob) {
-                capturedBlobs.delete(src)
-                return blob
-              }
-
-              await delay(1)
+            if (blob) {
+              capturedBlobs.delete(src)
+              return blob
             }
-          })(),
 
-          delay(10_000, { signal })
-        ]
-      )
+            await delay(1)
+          }
+        })(),
 
-      assert(
-        blob,
-        `no blob found for src: ${src} (index ${index}; page ${pageNav.page})`
-      )
-
-      const rawRenderedImage = Buffer.from(blob.base64, 'base64')
-      const c = sharp(rawRenderedImage)
-      const m = await c.metadata()
-      renderedPageImageBuffer = await c
-        .resize({
-          width: Math.floor(m.width / deviceScaleFactor),
-          height: Math.floor(m.height / deviceScaleFactor)
-        })
-        .png({ quality: 90 })
-        .toBuffer()
-    } else {
-      renderedPageImageBuffer = await page
-        .locator(krRendererMainImageSelector)
-        .screenshot({ type: 'png', scale: 'css' })
-    }
+        delay(10_000, { signal })
+      ]
+    )
 
     assert(
-      renderedPageImageBuffer,
-      `no buffer found for src: ${src} (index ${index}; page ${pageNav.page})`
+      blob,
+      `no blob found for src: ${src} (index ${index}; page ${pageNav.page})`
     )
+
+    const rawRenderedImage = Buffer.from(blob.base64, 'base64')
+    const c = sharp(rawRenderedImage)
+    const m = await c.metadata()
+    const renderedPageImageBuffer = await c
+      .resize({
+        width: Math.floor(m.width / deviceScaleFactor),
+        height: Math.floor(m.height / deviceScaleFactor)
+      })
+      .png()
+      .toBuffer()
 
     const screenshotPath = path.join(
       pageScreenshotsDir,
@@ -568,7 +541,7 @@ async function main() {
       screenshot: screenshotPath
     }
     result.pages.push(pageChunk)
-    console.warn(pageChunk)
+    console.log(pageChunk)
     await writeResultMetadata()
 
     let retries = 0
@@ -580,7 +553,6 @@ async function main() {
 
       let navigationTimeout = 10_000
       try {
-        // await page.keyboard.press('ArrowRight')
         await page
           .locator('.kr-chevron-container-right')
           .click({ timeout: 5000 })
@@ -627,7 +599,7 @@ async function main() {
   console.log(metadataPath)
 
   if (initialPageNav?.page !== undefined) {
-    console.warn(`resetting back to initial page ${initialPageNav.page}...`)
+    console.log(`resetting back to initial page ${initialPageNav.page}...`)
     // Reset back to the initial page
     await goToPage(initialPageNav.page)
   }

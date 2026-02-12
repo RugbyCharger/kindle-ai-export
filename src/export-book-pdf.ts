@@ -1,13 +1,12 @@
 import 'dotenv/config'
 
 import fs from 'node:fs'
-import fsp from 'node:fs/promises'
 import path from 'node:path'
 
 import PDFDocument from 'pdfkit'
 
 import type { BookMetadata, ContentChunk } from './types'
-import { assert, getEnv } from './utils'
+import { assert, getEnv, iterateChapters, readJsonFile } from './utils'
 
 async function main() {
   const asin = getEnv('ASIN')
@@ -15,12 +14,12 @@ async function main() {
 
   const outDir = path.join('out', asin)
 
-  const content = JSON.parse(
-    await fsp.readFile(path.join(outDir, 'content.json'), 'utf8')
-  ) as ContentChunk[]
-  const metadata = JSON.parse(
-    await fsp.readFile(path.join(outDir, 'metadata.json'), 'utf8')
-  ) as BookMetadata
+  const content = await readJsonFile<ContentChunk[]>(
+    path.join(outDir, 'content.json')
+  )
+  const metadata = await readJsonFile<BookMetadata>(
+    path.join(outDir, 'metadata.json')
+  )
   assert(content.length, 'no book content found')
   assert(metadata.meta, 'invalid book metadata: missing meta')
   assert(metadata.toc?.length, 'invalid book metadata: missing toc')
@@ -63,25 +62,11 @@ async function main() {
   renderTitlePage()
 
   let needsNewPage = false
-  let index = 0
 
-  for (let i = 0; i < metadata.toc.length - 1; i++) {
-    const tocItem = metadata.toc[i]!
-    if (tocItem.page === undefined) continue
-
-    const nextTocItem = metadata.toc[i + 1]!
-    const nextIndex = nextTocItem.page
-      ? content.findIndex((c) => c.page >= nextTocItem.page!)
-      : content.length
-    if (nextIndex < index) continue
-
+  for (const { tocItem, text } of iterateChapters(metadata.toc, content)) {
     if (needsNewPage) {
       doc.addPage()
     }
-
-    // Aggregate all of the chunks in this chapter into a single string.
-    const chunks = content.slice(index, nextIndex)
-    const text = chunks.map((chunk) => chunk.text).join(' ')
 
     ;(doc as any).outline.addItem(tocItem.label)
     doc.fontSize(tocItem.depth === 1 ? 16 : 20)
@@ -96,7 +81,6 @@ async function main() {
       paragraphGap: 8
     })
 
-    index = nextIndex
     needsNewPage = true
   }
 

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { BookMetadata, ContentChunk } from './types'
-import { assert, getEnv, readJsonFile } from './utils'
+import { assert, getEnv, iterateChapters, readJsonFile } from './utils'
 
 async function main() {
   const asin = getEnv('ASIN')
@@ -25,19 +25,14 @@ async function main() {
   const title = metadata.meta.title
   const authors = metadata.meta.authorList
 
-  let lastTocItemIndex = 0
-  for (let i = 0, index = 0; i < metadata.toc.length - 1; i++) {
-    const tocItem = metadata.toc[i]!
-    if (tocItem.page === undefined) continue
+  const chapters = [...iterateChapters(metadata.toc, content)]
 
-    const nextTocItem = metadata.toc[i + 1]!
-    const nextIndex = nextTocItem.page
-      ? content.findIndex((c) => c.page >= nextTocItem.page!)
-      : content.length
-    if (nextIndex < index) continue
-
-    lastTocItemIndex = i
-  }
+  const tocMarkdown = chapters
+    .map(
+      ({ tocItem }) =>
+        `${'  '.repeat(tocItem.depth)}- [${tocItem.label}](#${tocItem.label.toLowerCase().replaceAll(/[^\da-z]+/g, '-')})`
+    )
+    .join('\n')
 
   let output = `# ${title}
 
@@ -47,42 +42,16 @@ async function main() {
 
 ## Table of Contents
 
-${metadata.toc
-  .filter(
-    (tocItem, index) => tocItem.page !== undefined && index <= lastTocItemIndex
-  )
-  .map(
-    (tocItem) =>
-      `${'  '.repeat(tocItem.depth)}- [${tocItem.label}](#${tocItem.label.toLowerCase().replaceAll(/[^\da-z]+/g, '-')})`
-  )
-  .join('\n')}
+${tocMarkdown}
 
 ---`
 
-  for (let i = 0, index = 0; i < metadata.toc.length - 1; i++) {
-    const tocItem = metadata.toc[i]!
-    if (tocItem.page === undefined) continue
-
-    const nextTocItem = metadata.toc[i + 1]!
-    const nextIndex = nextTocItem.page
-      ? content.findIndex((c) => c.page >= nextTocItem.page!)
-      : content.length
-    if (nextIndex < index) continue
-
-    const chunks = content.slice(index, nextIndex)
-
-    const text = chunks
-      .map((chunk) => chunk.text)
-      .join(' ')
-      .replaceAll('\n', '\n\n')
-
+  for (const { tocItem, text } of chapters) {
     output += `
 
 ${'#'.repeat(tocItem.depth + 2)} ${tocItem.label}
 
-${text}`
-
-    index = nextIndex
+${text.replaceAll('\n', '\n\n')}`
   }
 
   await fs.writeFile(path.join(outDir, 'book.md'), output)
